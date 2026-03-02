@@ -324,6 +324,11 @@
 
     <script>
         // ============================================
+        // Base URL - auto-detect from current page
+        // ============================================
+        const BASE_URL = window.location.origin;
+
+        // ============================================
         // Session & Context
         // ============================================
         const sessionId = 'session-' + Date.now();
@@ -337,7 +342,6 @@
                 if (event.data && typeof event.data === 'object') {
                     const data = event.data;
                     
-                    // Chatwoot sends conversation context
                     if (data.event === 'appContext' || data.id || data.meta) {
                         conversationContext = {
                             id: data.id,
@@ -353,9 +357,7 @@
                         badge.style.display = 'block';
                     }
                 }
-            } catch (e) {
-                // Ignore non-Chatwoot messages
-            }
+            } catch (e) {}
         });
 
         // Request context from Chatwoot
@@ -387,19 +389,13 @@
 
         function formatMarkdown(text) {
             return text
-                // Code blocks
                 .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-                // Inline code
                 .replace(/`([^`]+)`/g, '<code style="background:#1a1a2e;padding:2px 6px;border-radius:4px;direction:ltr">$1</code>')
-                // Bold
                 .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                // Headers
                 .replace(/^### (.+)$/gm, '<strong style="font-size:14px">$1</strong><br>')
                 .replace(/^## (.+)$/gm, '<strong style="font-size:15px;color:#a855f7">$1</strong><br>')
-                // Lists
                 .replace(/^- (.+)$/gm, '• $1<br>')
                 .replace(/^\d+\. (.+)$/gm, (m, p1, offset, str) => `${str.substring(0, offset).split('\n').filter(l => /^\d+\./.test(l)).length + 1}. ${p1}<br>`)
-                // Line breaks
                 .replace(/\n\n/g, '<br><br>')
                 .replace(/\n/g, '<br>');
         }
@@ -408,17 +404,15 @@
             const text = inputEl.value.trim();
             if (!text) return;
 
-            // Add user message
             addMessage(text, 'user');
             inputEl.value = '';
             sendBtn.disabled = true;
 
-            // Show typing
             typingEl.classList.add('active');
             messagesEl.scrollTop = messagesEl.scrollHeight;
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch(BASE_URL + '/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -439,7 +433,6 @@
                 addMessage('⚠️ مفيش اتصال بالسيرفر', 'system');
             }
 
-            // Hide typing
             typingEl.classList.remove('active');
             sendBtn.disabled = false;
             inputEl.focus();
@@ -450,7 +443,6 @@
             sendMessage();
         }
 
-        // Enter to send
         inputEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -458,9 +450,7 @@
             }
         });
 
-        // Focus input on load
         inputEl.focus();
     </script>
 </body>
 </html>
-
