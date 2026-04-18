@@ -19,6 +19,102 @@ const openai = new OpenAI({
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 // ============================================
+// n8n Webhook — Customer Lookup
+// ============================================
+const N8N_CUSTOMER_LOOKUP_URL =
+    process.env.N8N_CUSTOMER_LOOKUP_URL ||
+    'https://n8n.engosoft.com/webhook/ops-customer-lookup';
+
+/**
+ * يجيب بيانات العميل من Odoo عن طريق n8n
+ * @param {string} phone - رقم التليفون كما ورد في الرسالة
+ * @returns {object|null} - بيانات العميل أو null لو مفيش
+ */
+async function fetchCustomerByPhone(phone) {
+    try {
+        const res = await fetch(N8N_CUSTOMER_LOOKUP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone }),
+            signal: AbortSignal.timeout(10000) // 10s timeout
+        });
+
+        if (!res.ok) return null;
+
+        const data = await res.json();
+        return data?.found ? data : null;
+    } catch (err) {
+        console.warn('⚠️ n8n customer lookup failed:', err.message);
+        return null;
+    }
+}
+
+/**
+ * يطلع رقم التليفون من الرسالة (مصري / سعودي / دولي)
+ * @param {string} message
+ * @returns {string|null}
+ */
+function extractPhone(message) {
+    const match = message.match(/(?:\+20|\+966|00966|0020)?0?\d{9,10}/);
+    return match ? match[0] : null;
+}
+
+/**
+ * يحوّل بيانات العميل لـ context نص يُحقن في الـ system prompt
+ * @param {object} data - الـ response من n8n
+ * @returns {string}
+ */
+function buildCustomerContext(data) {
+    const c = data.customer || {};
+    const f = data.financial || {};
+    const s = data.salesperson || {};
+    const events = data.events || {};
+    const products = (data.products_purchased || [])
+        .map(p => `  • ${p.product_name} (${p.qty_delivered}/${p.qty_ordered} وُصّلت)`)
+        .join('\n');
+
+    const invoicesSummary = (data.invoices || [])
+        .slice(0, 5)
+        .map(i => `  • ${i.number} — ${i.amount_total} جنيه — ${i.payment_status}`)
+        .join('\n');
+
+    const completedEvents = (events.completed_list || [])
+        .map(e => `  • ${e.name}`)
+        .join('\n');
+
+    const pendingEvents = (events.pending_list || [])
+        .map(e => `  • ${e.name}`)
+        .join('\n');
+
+    return `
+---
+[بيانات العميل من Odoo]
+الاسم: ${c.name || '—'}
+الهاتف: ${c.phone || '—'} | الموبايل: ${c.mobile || '—'}
+البريد: ${c.email || '—'} | المدينة: ${c.city || '—'}
+موظف المبيعات: ${s.name || '—'}
+
+المالية:
+  إجمالي الفواتير: ${f.total_invoiced || 0} جنيه
+  المدفوع: ${f.total_paid || 0} جنيه
+  المتبقي: ${f.total_due || 0} جنيه
+  عدد الفواتير: ${f.invoice_count || 0}
+
+أحدث الفواتير:
+${invoicesSummary || '  لا توجد فواتير'}
+
+المنتجات المشتراة:
+${products || '  لا توجد منتجات'}
+
+الإيفنتات المنتهية (${events.completed || 0}):
+${completedEvents || '  لا يوجد'}
+
+الإيفنتات المتبقية (${events.pending || 0}):
+${pendingEvents || '  لا يوجد'}
+---`;
+}
+
+// ============================================
 // Load Knowledge Base from files
 // ============================================
 function loadKnowledge() {
@@ -144,18 +240,33 @@ app.post('/api/chat', async (req, res) => {
         session.lastActive = Date.now();
         const history = session.messages;
 
-        // Add conversation context if available
-        let contextMessage = '';
+        // ── Odoo Customer Lookup ──────────────────────────────
+        let customerContext = '';
+        const detectedPhone = extractPhone(message);
+        if (detectedPhone) {
+            console.log(`📞 Phone detected: ${detectedPhone} — querying n8n...`);
+            const customerData = await fetchCustomerByPhone(detectedPhone);
+            if (customerData) {
+                customerContext = buildCustomerContext(customerData);
+                console.log(`✅ Customer found: ${customerData.customer?.name}`);
+            } else {
+                customerContext = `\n---\n[بحث Odoo: لم يُعثر على عميل بالرقم ${detectedPhone}]\n---`;
+                console.log(`❌ No customer found for: ${detectedPhone}`);
+            }
+        }
+
+        // ── Conversation Context (Chatwoot) ───────────────────
+        let chatwootContext = '';
         if (conversationContext) {
-            contextMessage = `\n\n[سياق المحادثة الحالية: Conversation #${conversationContext.id || 'N/A'}, Status: ${conversationContext.status || 'N/A'}, Inbox: ${conversationContext.inbox || 'N/A'}, Contact: ${conversationContext.contactName || 'N/A'}]`;
+            chatwootContext = `\n[سياق Chatwoot: Conversation #${conversationContext.id || 'N/A'}, Status: ${conversationContext.status || 'N/A'}, Inbox: ${conversationContext.inbox || 'N/A'}, Contact: ${conversationContext.contactName || 'N/A'}]`;
         }
 
         history.push({
             role: 'user',
-            content: message + contextMessage
+            content: message + customerContext + chatwootContext
         });
 
-        // Keep only last 10 messages to manage tokens (knowledge base is large)
+        // Keep only last 10 messages to manage tokens
         if (history.length > 10) {
             history.splice(0, history.length - 10);
         }
