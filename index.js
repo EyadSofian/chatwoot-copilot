@@ -55,7 +55,9 @@ async function fetchCustomerByPhone(phone) {
  * @returns {string|null}
  */
 function extractPhone(message) {
-    const match = message.match(/(?:\+20|\+966|00966|0020)?0?\d{9,10}/);
+    // شيل المسافات الأول، ابحث عن الرقم، رجّعه نظيف
+    const cleaned = message.replace(/\s+/g, '');
+    const match = cleaned.match(/(\+966\d{9}|\+20\d{10}|00966\d{9}|0020\d{10}|01[0-9]{9})/);
     return match ? match[0] : null;
 }
 
