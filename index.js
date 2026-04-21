@@ -39,7 +39,10 @@ async function fetchCustomerByPhone(phone) {
             signal: AbortSignal.timeout(10000) // 10s timeout
         });
 
-        if (!res.ok) return null;
+        if (!res.ok) {
+            console.error(`⚠️ n8n responded with status: ${res.status}`);
+            return null;
+        }
 
         const data = await res.json();
         return data?.found ? data : null;
@@ -50,14 +53,20 @@ async function fetchCustomerByPhone(phone) {
 }
 
 /**
- * يطلع رقم التليفون من الرسالة (مصري / سعودي / دولي)
+ * يطلع رقم التليفون من الرسالة ويصلح مشكلة اتجاه النص (RTL)
  * @param {string} message
  * @returns {string|null}
  */
 function extractPhone(message) {
-    // شيل المسافات الأول، ابحث عن الرقم، رجّعه نظيف
-    const cleaned = message.replace(/\s+/g, '');
+    // 1. استخراج الأرقام وعلامة + فقط لتنظيف أي نصوص أخرى
+    let cleaned = message.replace(/[^\d+]/g, '');
+    
+    // 2. لو علامة + موجودة في آخر الرقم بسبب الـ RTL، انقلها للأول
+    cleaned = cleaned.replace(/(\d+)\+$/, '+$1');
+    
+    // 3. البحث عن الصيغ المعتمدة (سعودي/مصري/دولي/محلي)
     const match = cleaned.match(/(\+966\d{9}|\+20\d{10}|00966\d{9}|0020\d{10}|01[0-9]{9})/);
+    
     return match ? match[0] : null;
 }
 
